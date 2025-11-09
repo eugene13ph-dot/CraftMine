@@ -1,0 +1,676 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+
+const MinecraftGame = () => {
+  const mountRef = useRef(null);
+  const [isMobile, setIsMobile] = useState(false);
+  
+  useEffect(() => {
+    if (!mountRef.current) return;
+    
+    setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+    
+    // Scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    scene.fog = new THREE.Fog(0x87CEEB, 0, 50);
+    
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 5, 10);
+    
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: false,
+      powerPreference: "high-performance"
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    mountRef.current.appendChild(renderer.domElement);
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(50, 50, 50);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.width = 1024;
+    directionalLight.shadow.mapSize.height = 1024;
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 150;
+    directionalLight.shadow.camera.left = -50;
+    directionalLight.shadow.camera.right = 50;
+    directionalLight.shadow.camera.top = 50;
+    directionalLight.shadow.camera.bottom = -50;
+    scene.add(directionalLight);
+    
+    // World generation constants
+    const blockSize = 1;
+    const world = [];
+    const worldSize = 15;
+    const renderDistance = 30;
+    
+    // Block textures
+    const createBlockMaterial = (color) => {
+      return new THREE.MeshLambertMaterial({ 
+        color: color,
+        flatShading: true
+      });
+    };
+    
+    const grassMaterial = createBlockMaterial(0x7CFC00);
+    const dirtMaterial = createBlockMaterial(0x8B4513);
+    const stoneMaterial = createBlockMaterial(0x808080);
+    const woodMaterial = createBlockMaterial(0xDEB887);
+    
+    // Reuse geometries for optimization
+    const blockGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+    
+    // World generation
+    for (let x = -worldSize; x < worldSize; x++) {
+      for (let z = -worldSize; z < worldSize; z++) {
+        const height = Math.floor(Math.random() * 3) + 1;
+        for (let y = 0; y < height; y++) {
+          let material;
+          
+          if (y === height - 1) material = grassMaterial;
+          else if (y === height - 2) material = dirtMaterial;
+          else material = stoneMaterial;
+          
+          const block = new THREE.Mesh(blockGeometry, material);
+          block.position.set(x * blockSize, y * blockSize, z * blockSize);
+          block.castShadow = true;
+          block.receiveShadow = true;
+          scene.add(block);
+          world.push(block);
+        }
+      }
+    }
+    
+    // Add some trees
+    for (let i = 0; i < 15; i++) {
+      const x = (Math.random() - 0.5) * worldSize * 2;
+      const z = (Math.random() - 0.5) * worldSize * 2;
+      
+      // Trunk
+      for (let y = 1; y < 5; y++) {
+        const trunk = new THREE.Mesh(blockGeometry, woodMaterial);
+        trunk.position.set(x, y, z);
+        trunk.castShadow = true;
+        scene.add(trunk);
+      }
+      
+      // Leaves
+      const leavesMaterial = createBlockMaterial(0x228B22);
+      for (let lx = -1; lx <= 1; lx++) {
+        for (let lz = -1; lz <= 1; lz++) {
+          for (let ly = 5; ly < 7; ly++) {
+            const leaves = new THREE.Mesh(blockGeometry, leavesMaterial);
+            leaves.position.set(x + lx, ly, z + lz);
+            leaves.castShadow = true;
+            scene.add(leaves);
+          }
+        }
+      }
+    }
+    
+    // Player
+    const player = {
+      position: new THREE.Vector3(0, 5, 10),
+      rotation: { y: 0, x: 0 },
+      velocity: new THREE.Vector3(0, 0, 0),
+      speed: 0.1,
+      jumpStrength: 0.2,
+      onGround: false
+    };
+    
+    // Controls
+    const keys = {};
+    const touchState = { active: false, startX: 0, startY: 0, moveX: 0, moveY: 0 };
+    const joystickState = { x: 0, y: 0 };
+    let selectedBlockType = 'grass';
+    const raycaster = new THREE.Raycaster();
+    raycaster.far = 10;
+    
+    // Block outline
+    const outlineGeometry = new THREE.EdgesGeometry(blockGeometry);
+    const outlineMaterial = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
+    const outline = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+    outline.visible = false;
+    scene.add(outline);
+    
+    window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+    window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+    
+    // Mouse controls for desktop
+    let isPointerLocked = false;
+    renderer.domElement.addEventListener('click', () => {
+      if (!isMobile) {
+        renderer.domElement.requestPointerLock();
+      }
+    });
+    
+    document.addEventListener('pointerlockchange', () => {
+      isPointerLocked = document.pointerLockElement === renderer.domElement;
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (isPointerLocked) {
+        player.rotation.y -= e.movementX * 0.002;
+        player.rotation.x -= e.movementY * 0.002;
+        player.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.rotation.x));
+      }
+    });
+    
+    // Block breaking and placing
+    const getTargetBlock = () => {
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const intersects = raycaster.intersectObjects(world);
+      return intersects.length > 0 ? intersects[0] : null;
+    };
+    
+    const breakBlock = () => {
+      const intersect = getTargetBlock();
+      if (!intersect) return;
+      
+      const block = intersect.object;
+      scene.remove(block);
+      const index = world.indexOf(block);
+      if (index > -1) world.splice(index, 1);
+      outline.visible = false;
+    };
+    
+    const placeBlock = () => {
+      const intersect = getTargetBlock();
+      if (!intersect) return;
+      
+      const blockPos = intersect.point.clone();
+      blockPos.add(intersect.face.normal.multiplyScalar(0.5));
+      blockPos.x = Math.floor(blockPos.x) + 0.5;
+      blockPos.y = Math.floor(blockPos.y) + 0.5;
+      blockPos.z = Math.floor(blockPos.z) + 0.5;
+      
+      // Don't place if player is in that position
+      if (Math.abs(blockPos.x - player.position.x) < 1 &&
+          Math.abs(blockPos.y - player.position.y) < 1.5 &&
+          Math.abs(blockPos.z - player.position.z) < 1) {
+        return;
+      }
+      
+      // Check if block already exists
+      const exists = world.some(block =>
+        Math.abs(block.position.x - blockPos.x) < 0.1 &&
+        Math.abs(block.position.y - blockPos.y) < 0.1 &&
+        Math.abs(block.position.z - blockPos.z) < 0.1
+      );
+      
+      if (!exists) {
+        let material;
+        
+        switch(selectedBlockType) {
+          case 'grass': material = grassMaterial; break;
+          case 'dirt': material = dirtMaterial; break;
+          case 'stone': material = stoneMaterial; break;
+          case 'wood': material = woodMaterial; break;
+          default: material = grassMaterial;
+        }
+        
+        const block = new THREE.Mesh(blockGeometry, material);
+        block.position.copy(blockPos);
+        block.castShadow = true;
+        block.receiveShadow = true;
+        scene.add(block);
+        world.push(block);
+      }
+    };
+    
+    // Mouse click for desktop
+    const handleClick = (e) => {
+      if (!isPointerLocked) return;
+      
+      if (e.button === 0) { // Left click - break
+        breakBlock();
+      } else if (e.button === 2) { // Right click - place
+        placeBlock();
+      }
+    };
+    
+    renderer.domElement.addEventListener('mousedown', handleClick);
+    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    
+    // Touch controls for mobile
+    const handleTouchMove = (e) => {
+      if (touchState.active && e.target.id === 'look-area') {
+        const touch = e.touches[0];
+        touchState.moveX = touch.clientX;
+        touchState.moveY = touch.clientY;
+        
+        const deltaX = (touchState.moveX - touchState.startX) * 0.003;
+        const deltaY = (touchState.moveY - touchState.startY) * 0.003;
+        
+        player.rotation.y -= deltaX;
+        player.rotation.x -= deltaY;
+        player.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.rotation.x));
+        
+        touchState.startX = touchState.moveX;
+        touchState.startY = touchState.moveY;
+      }
+    };
+    
+    const handleTouchTap = (e) => {
+      if (e.target.id === 'look-area' && e.touches.length === 1) {
+        breakBlock();
+      }
+    };
+    
+    document.addEventListener('touchmove', handleTouchMove, { passive: false });
+    document.addEventListener('touchstart', handleTouchTap, { passive: false });
+    
+    // Game loop
+    let lastTime = performance.now();
+    const targetFPS = 60;
+    const frameTime = 1000 / targetFPS;
+    
+    function animate(currentTime) {
+      requestAnimationFrame(animate);
+      
+      const deltaTime = currentTime - lastTime;
+      if (deltaTime < frameTime) return;
+      
+      lastTime = currentTime - (deltaTime % frameTime);
+      
+      // Movement
+      const moveVector = new THREE.Vector3();
+      const forward = new THREE.Vector3();
+      const right = new THREE.Vector3();
+      
+      // Calculate forward and right vectors based on camera rotation
+      forward.set(
+        -Math.sin(player.rotation.y),
+        0,
+        -Math.cos(player.rotation.y)
+      );
+      right.set(
+        Math.cos(player.rotation.y),
+        0,
+        -Math.sin(player.rotation.y)
+      );
+      
+      // Apply movement based on input
+      if (keys['KeyW'] || joystickState.y < -0.3) {
+        moveVector.add(forward);
+      }
+      if (keys['KeyS'] || joystickState.y > 0.3) {
+        moveVector.sub(forward);
+      }
+      if (keys['KeyA'] || joystickState.x < -0.3) {
+        moveVector.sub(right);
+      }
+      if (keys['KeyD'] || joystickState.x > 0.3) {
+        moveVector.add(right);
+      }
+      
+      if (moveVector.length() > 0) {
+        moveVector.normalize();
+        player.position.x += moveVector.x * player.speed;
+        player.position.z += moveVector.z * player.speed;
+      }
+      
+      // Gravity
+      player.velocity.y -= 0.01;
+      player.position.y += player.velocity.y;
+      
+      // Ground collision
+      if (player.position.y <= 3) {
+        player.position.y = 3;
+        player.velocity.y = 0;
+        player.onGround = true;
+      } else {
+        player.onGround = false;
+      }
+      
+      // Jump
+      if ((keys['Space'] || keys['Jump']) && player.onGround) {
+        player.velocity.y = player.jumpStrength;
+      }
+      
+      // Update camera
+      camera.position.copy(player.position);
+      camera.rotation.y = player.rotation.y;
+      camera.rotation.x = player.rotation.x;
+      
+      // Update block outline
+      const targetBlock = getTargetBlock();
+      if (targetBlock) {
+        outline.position.copy(targetBlock.object.position);
+        outline.visible = true;
+      } else {
+        outline.visible = false;
+      }
+      
+      // Frustum culling optimization
+      camera.updateMatrixWorld();
+      const frustum = new THREE.Frustum();
+      frustum.setFromProjectionMatrix(
+        new THREE.Matrix4().multiplyMatrices(
+          camera.projectionMatrix,
+          camera.matrixWorldInverse
+        )
+      );
+      
+      // Only render blocks within view
+      world.forEach(block => {
+        const distance = block.position.distanceTo(player.position);
+        block.visible = distance < renderDistance && frustum.intersectsObject(block);
+      });
+      
+      renderer.render(scene, camera);
+    }
+    
+    animate(performance.now());
+    
+    // Handle window resize
+    const handleResize = () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Joystick handler
+    const handleJoystick = (e) => {
+      const joystick = e.target.closest('.joystick-container');
+      if (!joystick) return;
+      
+      const rect = joystick.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      const touch = e.touches[0];
+      const x = touch.clientX - rect.left - centerX;
+      const y = touch.clientY - rect.top - centerY;
+      const distance = Math.sqrt(x * x + y * y);
+      const maxDistance = rect.width / 2 - 20;
+      
+      if (distance < maxDistance) {
+        joystickState.x = x / maxDistance;
+        joystickState.y = y / maxDistance;
+      } else {
+        joystickState.x = (x / distance) * (maxDistance / maxDistance);
+        joystickState.y = (y / distance) * (maxDistance / maxDistance);
+      }
+    };
+    
+    const resetJoystick = () => {
+      joystickState.x = 0;
+      joystickState.y = 0;
+    };
+    
+    document.addEventListener('touchstart', (e) => {
+      if (e.target.closest('.joystick-container')) {
+        handleJoystick(e);
+      } else if (e.target.id === 'look-area') {
+        touchState.active = true;
+        touchState.startX = e.touches[0].clientX;
+        touchState.startY = e.touches[0].clientY;
+      } else if (e.target.classList.contains('block-btn')) {
+        selectedBlockType = e.target.dataset.block;
+        document.querySelectorAll('.block-btn').forEach(btn => {
+          btn.style.border = '3px solid rgba(255, 255, 255, 0.5)';
+        });
+        e.target.style.border = '3px solid #FFD700';
+      }
+    });
+    
+    document.addEventListener('touchmove', (e) => {
+      if (e.target.closest('.joystick-container')) {
+        e.preventDefault();
+        handleJoystick(e);
+      }
+    }, { passive: false });
+    
+    document.addEventListener('touchend', (e) => {
+      if (e.target.closest('.joystick-container')) {
+        resetJoystick();
+      } else if (e.target.id === 'look-area') {
+        touchState.active = false;
+      }
+    });
+    
+    // Jump button handler
+    const jumpBtn = document.getElementById('jump-btn');
+    if (jumpBtn) {
+      jumpBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        keys['Jump'] = true;
+      });
+      jumpBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        keys['Jump'] = false;
+      });
+    }
+    
+    // Block selection for desktop
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Digit1') selectedBlockType = 'grass';
+      if (e.code === 'Digit2') selectedBlockType = 'dirt';
+      if (e.code === 'Digit3') selectedBlockType = 'stone';
+      if (e.code === 'Digit4') selectedBlockType = 'wood';
+    });
+    
+    // Place block button for mobile
+    const placeBtn = document.getElementById('place-btn');
+    if (placeBtn) {
+      placeBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        placeBlock();
+      });
+    }
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchstart', handleTouchTap);
+      renderer.domElement.removeEventListener('mousedown', handleClick);
+      if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
+        mountRef.current.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
+    };
+  }, [isMobile]);
+  
+  return (
+    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
+      <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+      
+      {/* Crosshair */}
+      <div style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        pointerEvents: 'none',
+        zIndex: 1000
+      }}>
+        <div style={{
+          position: 'relative',
+          width: '20px',
+          height: '20px'
+        }}>
+          {/* Horizontal line */}
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '0',
+            width: '100%',
+            height: '2px',
+            backgroundColor: 'white',
+            transform: 'translateY(-50%)',
+            boxShadow: '0 0 2px black'
+          }} />
+          {/* Vertical line */}
+          <div style={{
+            position: 'absolute',
+            left: '50%',
+            top: '0',
+            width: '2px',
+            height: '100%',
+            backgroundColor: 'white',
+            transform: 'translateX(-50%)',
+            boxShadow: '0 0 2px black'
+          }} />
+        </div>
+      </div>
+      
+      {isMobile && (
+        <>
+          <div id="look-area" style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            width: '60%',
+            height: '100%',
+            touchAction: 'none'
+          }} />
+          
+          <div className="joystick-container" style={{
+            position: 'absolute',
+            bottom: '30px',
+            left: '30px',
+            width: '120px',
+            height: '120px',
+            backgroundColor: 'rgba(255, 255, 255, 0.3)',
+            borderRadius: '50%',
+            border: '3px solid rgba(255, 255, 255, 0.5)',
+            touchAction: 'none'
+          }}>
+            <div style={{
+              position: 'absolute',
+              width: '40px',
+              height: '40px',
+              backgroundColor: 'rgba(255, 255, 255, 0.7)',
+              borderRadius: '50%',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              pointerEvents: 'none'
+            }} />
+          </div>
+          
+          <button id="jump-btn" style={{
+            position: 'absolute',
+            bottom: '120px',
+            right: '30px',
+            width: '70px',
+            height: '70px',
+            backgroundColor: 'rgba(255, 255, 255, 0.5)',
+            border: '3px solid rgba(255, 255, 255, 0.7)',
+            borderRadius: '50%',
+            fontSize: '12px',
+            fontWeight: 'bold',
+            color: '#333',
+            touchAction: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            JUMP
+          </button>
+          
+          <button id="place-btn" style={{
+            position: 'absolute',
+            bottom: '30px',
+            right: '30px',
+            width: '70px',
+            height: '70px',
+            backgroundColor: 'rgba(76, 175, 80, 0.7)',
+            border: '3px solid rgba(255, 255, 255, 0.7)',
+            borderRadius: '50%',
+            fontSize: '12px',
+            fontWeight: 'bold',
+            color: 'white',
+            touchAction: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            PLACE
+          </button>
+          
+          <div style={{
+            position: 'absolute',
+            top: '20px',
+            right: '20px',
+            display: 'flex',
+            gap: '10px'
+          }}>
+            <button className="block-btn" data-block="grass" style={{
+              width: '50px',
+              height: '50px',
+              backgroundColor: '#7CFC00',
+              border: '3px solid #FFD700',
+              borderRadius: '8px',
+              touchAction: 'none'
+            }} />
+            <button className="block-btn" data-block="dirt" style={{
+              width: '50px',
+              height: '50px',
+              backgroundColor: '#8B4513',
+              border: '3px solid rgba(255, 255, 255, 0.5)',
+              borderRadius: '8px',
+              touchAction: 'none'
+            }} />
+            <button className="block-btn" data-block="stone" style={{
+              width: '50px',
+              height: '50px',
+              backgroundColor: '#808080',
+              border: '3px solid rgba(255, 255, 255, 0.5)',
+              borderRadius: '8px',
+              touchAction: 'none'
+            }} />
+            <button className="block-btn" data-block="wood" style={{
+              width: '50px',
+              height: '50px',
+              backgroundColor: '#DEB887',
+              border: '3px solid rgba(255, 255, 255, 0.5)',
+              borderRadius: '8px',
+              touchAction: 'none'
+            }} />
+          </div>
+        </>
+      )}
+      
+      <div style={{
+        position: 'absolute',
+        top: '20px',
+        left: '20px',
+        color: 'white',
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+        pointerEvents: 'none'
+      }}>
+        <div>🎮 Minecraft Clone</div>
+        {!isMobile && <div style={{ fontSize: '12px', marginTop: '10px' }}>
+          Click to lock mouse<br/>
+          WASD - Move | Mouse - Look<br/>
+          Space - Jump<br/>
+          Left Click - Break Block<br/>
+          Right Click - Place Block<br/>
+          1-4 - Select Block Type
+        </div>}
+        {isMobile && <div style={{ fontSize: '12px', marginTop: '10px' }}>
+          Left Joystick - Move<br/>
+          Right Side - Look around<br/>
+          Tap screen - Break block<br/>
+          Green button - Place block<br/>
+          Top right - Select blocks
+        </div>}
+      </div>
+    </div>
+  );
+};
+
+export default MinecraftGame;
